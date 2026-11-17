@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoJSON Inspector &amp; Size Optimizer — Free Client-Side Tool</title>
+  <meta name="description" content="Inspect, validate, simplify coordinates, trim precision, and preview GeoJSON files 100% in your browser with zero server uploads." />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root { --bg:#0f172a; --panel:#1e293b; --border:#334155; --text:#f8fafc; --muted:#94a3b8; --accent:#890AB2; --accent2:#a855f7; --ok:#22c55e; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:Inter,system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+    header { padding:18px 24px; border-bottom:1px solid var(--border); display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; }
+    header h1 { font-size:18px; font-weight:700; }
+    header p { font-size:12.5px; color:var(--muted); }
+    .badge { background:rgba(168,85,247,0.18); color:#e9d5ff; border:1px solid rgba(168,85,247,0.4); padding:4px 10px; border-radius:999px; font-size:12px; }
+    main { max-width:1240px; margin:0 auto; padding:20px; display:grid; grid-template-columns:1fr 1.2fr; gap:18px; }
+    @media (max-width:900px) { main { grid-template-columns:1fr; } }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:12px; }
+    textarea { width:100%; min-height:220px; background:#0b1120; color:#e2e8f0; border:1px solid var(--border); border-radius:8px; padding:10px; font-family:ui-monospace,monospace; font-size:12px; resize:vertical; }
+    .controls { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    label { font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:4px; }
+    input[type="number"], input[type="file"] { background:#0b1120; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:7px 9px; font-size:13px; }
+    .btns { display:flex; flex-wrap:wrap; gap:8px; }
+    button { background:var(--accent); color:#fff; border:none; border-radius:8px; padding:9px 14px; font-weight:600; font-size:13px; cursor:pointer; }
+    button:hover { background:var(--accent2); }
+    button.sec { background:#334155; }
+    button.sec:hover { background:#475569; }
+    .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+    .stat { background:#0b1120; border:1px solid var(--border); border-radius:8px; padding:10px; }
+    .stat .k { font-size:11px; color:var(--muted); }
+    .stat .v { font-size:15px; font-weight:700; margin-top:2px; }
+    #map { width:100%; height:380px; border-radius:8px; border:1px solid var(--border); background:#0b1120; }
+    .err { color:#fca5a5; font-size:12.5px; display:none; }
+    footer { max-width:1240px; margin:0 auto; padding:0 20px 24px; font-size:12px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>GeoJSON Inspector &amp; Size Optimizer</h1>
+      <p>100% client-side in your browser — validate geometry, trim coordinate precision, simplify vertices, and export smaller GeoJSON.</p>
+    </div>
+    <span class="badge">Zero Server Upload · Private &amp; Instant</span>
+  </header>
+
+  <main>
+    <section class="card">
+      <label>Upload .geojson / .json file
+        <input type="file" id="fileInput" accept=".geojson,.json" />
+      </label>
+      <label>Or paste GeoJSON directly
+        <textarea id="rawInput" spellcheck="false"></textarea>
+      </label>
+      <div class="controls">
+        <label>Coordinate Decimal Precision (4–7)
+          <input type="number" id="precision" value="5" min="1" max="10" />
+        </label>
+        <label>Simplify Tolerance (0 = off, e.g. 0.0005)
+          <input type="number" id="tolerance" value="0" min="0" step="0.0001" />
+        </label>
+      </div>
+      <div class="btns">
+        <button id="btnRun">Inspect &amp; Optimize</button>
+        <button id="btnDownload" class="sec">Download Optimized .geojson</button>
+        <button id="btnCopy" class="sec">Copy Output JSON</button>
+        <button id="btnSample" class="sec">Load Sample</button>
+      </div>
+      <div id="errBox" class="err"></div>
+    </section>
+
+    <section class="card">
+      <div class="stats">
+        <div class="stat"><div class="k">Features</div><div class="v" id="stFeatures">0</div></div>
+        <div class="stat"><div class="k">Vertices</div><div class="v" id="stVertices">0</div></div>
+        <div class="stat"><div class="k">Original Size</div><div class="v" id="stOrig">0 KB</div></div>
+        <div class="stat"><div class="k">Optimized Size</div><div class="v" id="stOpt" style="color:var(--ok)">0 KB</div></div>
+      </div>
+      <div id="map"></div>
+      <div style="font-size:12px;color:var(--muted);" id="bboxText">Bounding Box: —</div>
+    </section>
+  </main>
+
+  <footer>
+    Runs locally in your browser via JavaScript. No data leaves your machine.
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const SAMPLE = {
+      type: "FeatureCollection",
+      features: [{
+        type: "Feature",
+        properties: { name: "Sample Polygon", category: "demo" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [[
+            [-35.735123456, -9.665812345],
+            [-35.710987654, -9.665812345],
+            [-35.710987654, -9.640123456],
+            [-35.735123456, -9.640123456],
+            [-35.735123456, -9.665812345]
+          ]]
+        }
+      }]
+    };
+
+    const map = L.map("map").setView([0, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    let layer = null;
+    let lastOutput = "";
+
+    function sqDist(p1, p2) {
+      const dx = p1[0] - p2[0], dy = p1[1] - p2[1];
+      return dx * dx + dy * dy;
+    }
+
+    function sqSegDist(p, p1, p2) {
+      let x = p1[0], y = p1[1], dx = p2[0] - x, dy = p2[1] - y;
+      if (dx !== 0 || dy !== 0) {
+        const t = ((p[0] - x) * dx + (p[1] - y) * dy) / (dx * dx + dy * dy);
+        if (t > 1) { x = p2[0]; y = p2[1]; }
+        else if (t > 0) { x += dx * t; y += dy * t; }
+      }
+      dx = p[0] - x; dy = p[1] - y;
+      return dx * dx + dy * dy;
+    }
+
+    function simplifyRing(pts, tol) {
+      if (tol <= 0 || pts.length <= 4) return pts;
+      const sqTol = tol * tol;
+      const out = [pts[0]];
+      for (let i = 1; i < pts.length - 1; i++) {
+        if (sqSegDist(pts[i], out[out.length - 1], pts[pts.length - 1]) > sqTol || sqDist(pts[i], out[out.length - 1]) > sqTol) {
+          out.push(pts[i]);
+        }
+      }
+      out.push(pts[pts.length - 1]);
+      return out.length >= 4 ? out : pts;
+    }
+
+    function roundCoord(c, factor) {
+      return [Math.round(c[0] * factor) / factor, Math.round(c[1] * factor) / factor];
+    }
+
+    function transformCoords(coords, depth, factor, tol) {
+      if (depth === 0) return roundCoord(coords, factor);
+      if (depth === 1) {
+        const rounded = coords.map(c => roundCoord(c, factor));
+        return tol > 0 ? simplifyRing(rounded, tol) : rounded;
+      }
+      return coords.map(c => transformCoords(c, depth - 1, factor, tol));
+    }
+
+    function countVertices(geom) {
+      if (!geom || !geom.coordinates) return 0;
+      const t = geom.type;
+      if (t === "Point") return 1;
+      if (t === "MultiPoint" || t === "LineString") return geom.coordinates.length;
+      if (t === "MultiLineString" || t === "Polygon") return geom.coordinates.reduce((a, r) => a + r.length, 0);
+      if (t === "MultiPolygon") return geom.coordinates.reduce((a, p) => a + p.reduce((b, r) => b + r.length, 0), 0);
+      return 0;
+    }
+
+    function optimizeGeom(geom, factor, tol) {
+      if (!geom) return geom;
+      const depthMap = { Point: 0, MultiPoint: 1, LineString: 1, MultiLineString: 2, Polygon: 2, MultiPolygon: 3 };
+      if (geom.type === "GeometryCollection") {
+        return { ...geom, geometries: (geom.geometries || []).map(g => optimizeGeom(g, factor, tol)) };
+      }
+      const d = depthMap[geom.type];
+      if (d === undefined) return geom;
+      return { ...geom, coordinates: transformCoords(geom.coordinates, d, factor, tol) };
+    }
+
+    function run() {
+      const errBox = document.getElementById("errBox");
+      errBox.style.display = "none";
+      const rawText = document.getElementById("rawInput").value.trim();
+      if (!rawText) return;
+      try {
+        const parsed = JSON.parse(rawText);
+        const precision = Math.min(10, Math.max(1, parseInt(document.getElementById("precision").value || "5", 10)));
+        const tol = Math.max(0, parseFloat(document.getElementById("tolerance").value || "0"));
+        const factor = Math.pow(10, precision);
+
+        let optimized;
+        let featureCount = 0;
+        let vertices = 0;
+
+        if (parsed.type === "FeatureCollection" && Array.isArray(parsed.features)) {
+          featureCount = parsed.features.length;
+          optimized = {
+            ...parsed,
+            features: parsed.features.map(f => {
+              const g = optimizeGeom(f.geometry, factor, tol);
+              vertices += countVertices(g);
+              return { ...f, geometry: g };
+            })
+          };
+        } else if (parsed.type === "Feature") {
+          featureCount = 1;
+          const g = optimizeGeom(parsed.geometry, factor, tol);
+          vertices = countVertices(g);
+          optimized = { ...parsed, geometry: g };
+        } else {
+          featureCount = 1;
+          optimized = optimizeGeom(parsed, factor, tol);
+          vertices = countVertices(optimized);
+        }
+
+        lastOutput = JSON.stringify(optimized);
+        const origKb = (new Blob([rawText]).size / 1024).toFixed(2);
+        const optKb = (new Blob([lastOutput]).size / 1024).toFixed(2);
+        const savedPct = origKb > 0 ? Math.max(0, Math.round((1 - optKb / origKb) * 100)) : 0;
+
+        document.getElementById("stFeatures").textContent = featureCount;
+        document.getElementById("stVertices").textContent = vertices;
+        document.getElementById("stOrig").textContent = `${origKb} KB`;
+        document.getElementById("stOpt").textContent = `${optKb} KB (-${savedPct}%)`;
+
+        if (layer) map.removeLayer(layer);
+        layer = L.geoJSON(optimized).addTo(map);
+        const bounds = layer.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [20, 20] });
+          document.getElementById("bboxText").textContent =
+            `Bounding Box: [${bounds.getWest().toFixed(4)}, ${bounds.getSouth().toFixed(4)}, ${bounds.getEast().toFixed(4)}, ${bounds.getNorth().toFixed(4)}]`;
+        }
+      } catch (e) {
+        errBox.textContent = "Invalid GeoJSON: " + e.message;
+        errBox.style.display = "block";
+      }
+    }
+
+    document.getElementById("btnRun").onclick = run;
+    document.getElementById("btnSample").onclick = () => {
+      document.getElementById("rawInput").value = JSON.stringify(SAMPLE, null, 2);
+      run();
+    };
+    document.getElementById("btnCopy").onclick = () => {
+      if (lastOutput) navigator.clipboard.writeText(lastOutput);
+    };
+    document.getElementById("btnDownload").onclick = () => {
+      if (!lastOutput) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([lastOutput], { type: "application/geo+json" }));
+      a.download = "optimized.geojson";
+      a.click();
+    };
+    document.getElementById("fileInput").onchange = (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        document.getElementById("rawInput").value = reader.result;
+        run();
+      };
+      reader.readAsText(file);
+    };
+
+    document.getElementById("btnSample").click();
+  </script>
+</body>
+</html>
